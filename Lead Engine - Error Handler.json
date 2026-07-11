@@ -1,0 +1,120 @@
+{
+  "name": "Lead Engine - Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "d7cdda5a-1000-412b-b50e-ddaf4fb2ef1e",
+      "name": "Error Trigger"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO dead_letter_queue (workflow_name, failed_node, error_message, payload)\nVALUES ($1, $2, $3, $4::jsonb);",
+        "options": {
+          "queryReplacement": "={{ [ $json.workflowName, $json.failedNode, $json.errorMessage, JSON.stringify($json.payload) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        416,
+        0
+      ],
+      "id": "f3169cf6-55f6-4800-a08d-94923fd071e1",
+      "name": "Dead Letter Queue",
+      "credentials": {
+        "postgres": {
+          "id": "10JgRAAv6lV3kufu",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.item.json;\n\nreturn {\n  json: {\n    workflowName: data.workflow?.name || 'Unknown',\n    failedNode: data.execution?.lastNodeExecuted || 'Unknown',\n    errorMessage: data.execution?.error?.message || 'No message',\n    payload: {\n      errorStack: data.execution?.error?.stack || null,\n      executionUrl: data.execution?.url || null,\n      executionId: data.execution?.id || null,\n      retryOf: data.execution?.retryOf || null\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "814e3ba6-a32d-41ec-838a-6ae1377019c5",
+      "name": "Shape Error Data"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://discord.com/api/webhooks/1517906332043448471/xeek-eNofHEgquNf2O6gB57xAtMzJLW8HR-WgbzX9zS0Q8p9HeAQ0ZFNfotAc-c5ytnZ",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ content: `🚨 Workflow Failure\\nWorkflow: ${$('Shape Error Data').item.json.workflowName}\\nFailed Node: ${$('Shape Error Data').item.json.failedNode}\\nError: ${$('Shape Error Data').item.json.errorMessage}\\nExecution: ${$('Shape Error Data').item.json.payload.executionUrl}` }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        624,
+        0
+      ],
+      "id": "8d2bcab6-9c6a-493d-a67f-3d1a3ab35106",
+      "name": "Send Discord Alert"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Shape Error Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dead Letter Queue": {
+      "main": [
+        [
+          {
+            "node": "Send Discord Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape Error Data": {
+      "main": [
+        [
+          {
+            "node": "Dead Letter Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "6c4fbf68-2b0d-4ef4-88ea-f4291bc9db8c",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "8ce3f92da4afb6bd2ed2ffbeb70a8662c593fc8d08f26336ecd908790771935d"
+  },
+  "nodeGroups": [],
+  "id": "Zsk00bV6HbDQ9Io5",
+  "tags": []
+}

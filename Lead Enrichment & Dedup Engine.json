@@ -1,0 +1,342 @@
+{
+  "name": "Lead Enrichment & Dedup Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "0dbdb5b9-ac05-489c-9cbf-e61bdd7f4b18",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -832,
+        96
+      ],
+      "id": "56139b24-975e-4047-a5f4-02a507892478",
+      "name": "Webhook",
+      "webhookId": "0dbdb5b9-ac05-489c-9cbf-e61bdd7f4b18"
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-120b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        384,
+        192
+      ],
+      "id": "140b2c4b-277e-4cd2-a9f1-314235c4eb79",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "GbcwRbkVraEHo7xQ",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $input.item.json.data || '';\n\n// Remove script/style blocks entirely, including their content\nlet text = html.replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '');\ntext = text.replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '');\n\n// Remove HTML comments\ntext = text.replace(/<!--[\\s\\S]*?-->/g, '');\n\n// Strip remaining tags\ntext = text.replace(/<[^>]+>/g, ' ');\n\n// Decode common entities\ntext = text.replace(/&nbsp;/g, ' ')\n           .replace(/&amp;/g, '&')\n           .replace(/&lt;/g, '<')\n           .replace(/&gt;/g, '>')\n           .replace(/&quot;/g, '\"')\n           .replace(/&#39;/g, \"'\");\n\n// Collapse extra whitespace\ntext = text.replace(/\\s+/g, ' ').trim();\n\n// Truncate — keeps Groq token usage low and avoids irrelevant footer/nav junk\nconst cleanText = text.slice(0, 3000);\n\nreturn {\n  json: {\n    cleanText: cleanText\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "0fc91cc7-5eb8-4783-93bf-6ff8e915ae13",
+      "name": "HTML cleaner"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.item.json.body || $input.item.json;\nconst lead = data.lead || {};\n\n// Strip extension text, then strip everything except digits\nfunction normalizePhone(raw) {\n  const withoutExt = raw.split(/ext\\.?/i)[0];\n  let digits = withoutExt.replace(/\\D/g, '');\n  \n  // Strip leading US country code so \"1-555-123-4567\" and \"555-123-4567\" match\n  if (digits.length === 11 && digits.startsWith('1')) {\n    digits = digits.slice(1);\n  }\n  \n  return digits;\n}\n\nconst rawPhones = (lead.contact && lead.contact.phones) || [];\nconst normalizedPhones = [...new Set(rawPhones.map(normalizePhone).filter(Boolean))];\n\nconst email = (lead.Email || lead.email || '').toLowerCase().trim();\nconst domain = ((lead.company && lead.company.domain) || '').toLowerCase().trim();\n\nreturn {\n  json: {\n    fullName: lead.fullName || '',\n    email: email,\n    phones: normalizedPhones,\n    primaryPhone: normalizedPhones[0] || null,\n    companyName: (lead.company && lead.company.name) || '',\n    domain: domain,\n    tags: lead.tags || [],\n    source: data.source || null,\n    submittedAt: data.submittedAt || null\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -624,
+        96
+      ],
+      "id": "41e92f8b-a81e-487d-bd3f-e829c63db2af",
+      "name": "Standardize Lead"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*) FROM inbound_leads WHERE email = $1;",
+        "options": {
+          "queryReplacement": "={{ [$json.email]}}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -416,
+        96
+      ],
+      "id": "acedde6a-d97e-4c7b-96dc-e26cc2d104ff",
+      "name": "Dedup check",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "10JgRAAv6lV3kufu",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "764130cc-d975-4091-a848-a11b4cf24feb",
+              "leftValue": "={{ Number($json.count) }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -208,
+        96
+      ],
+      "id": "d3c3e279-08d7-4a14-b0c1-fe27ba70998b",
+      "name": "Is Duplicate?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE inbound_leads SET last_seen_at = now() WHERE email = $1;",
+        "options": {
+          "queryReplacement": "={{ $('Standardize Lead').item.json.email }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        256
+      ],
+      "id": "5eac5947-f757-45a8-940a-c354831f1e89",
+      "name": "Update Last Seen",
+      "credentials": {
+        "postgres": {
+          "id": "10JgRAAv6lV3kufu",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://{{ $('Standardize Lead').item.json.domain }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        0,
+        0
+      ],
+      "id": "74714334-54e4-46ba-b7fd-91995613f1a7",
+      "name": "Scrape Company Site"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a B2B lead enrichment assistant. Based on the following scraped website content, extract:\n1. Estimated company size (e.g. \"1-10 employees\", \"11-50\", \"51-200\", \"201-1000\", \"1000+\", or \"Unknown\" if not inferable)\n2. Industry (short phrase, e.g. \"Software Development\", \"Healthcare\")\n3. Main business pain point — a one-sentence guess at what problem this company likely needs solved, based on what they do\n\nWebsite content:\n{{ $json.cleanText }}\n\nRespond with ONLY a valid JSON object, no markdown, no explanation, in this exact format:\n{\n  \"companySize\": \"...\",\n  \"industry\": \"...\",\n  \"painPoint\": \"...\"\n}",
+        "messages": {
+          "messageValues": [
+            {
+              "message": "=You are a B2B lead enrichment assistant. Based on the following scraped website content, extract: 1. Estimated company size (e.g. \"1-10 employees\", \"11-50\", \"51-200\", \"201-1000\", \"1000+\", or \"Unknown\" if not inferable) 2. Industry (short phrase, e.g. \"Software Development\", \"Healthcare\") 3. Main business pain point — a one-sentence guess at what problem this company likely needs solved, based on what they do  Website content: {{ $json.cleanText }}  Respond with ONLY a valid JSON object, no markdown, no explanation, in this exact format: {   \"companySize\": \"...\",   \"industry\": \"...\",   \"painPoint\": \"...\" }"
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        384,
+        0
+      ],
+      "id": "f302b5bf-0e08-4984-87b3-998489409d08",
+      "name": "Enrich Lead with AI"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawText = $input.item.json.text || '';\n\n// Strip markdown code fences in case the model added them anyway\nlet cleaned = rawText.replace(/```json\\s*/gi, '').replace(/```/g, '').trim();\n\nlet enrichment;\ntry {\n  enrichment = JSON.parse(cleaned);\n} catch (e) {\n  // This throw is intentional — it's exactly what your future\n  // Error Trigger / Dead Letter Queue sub-workflow will catch\n  throw new Error(`Failed to parse LLM enrichment output: ${e.message}. Raw: ${cleaned}`);\n}\n\nreturn {\n  json: {\n    companySize: enrichment.companySize || 'Unknown',\n    industry: enrichment.industry || 'Unknown',\n    painPoint: enrichment.painPoint || 'Unknown'\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ],
+      "id": "15231d8f-4ffd-4116-9c93-868d6caba7a5",
+      "name": "Parse AI Output"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO inbound_leads (\n  email, full_name, primary_phone, company_name, domain, tags, source, submitted_at, enrichment, status\n) VALUES (\n  $1, $2, $3, $4, $5, $6::jsonb, $7, $8::timestamptz, $9::jsonb, 'enriched'\n)\nON CONFLICT (email) DO NOTHING;",
+        "options": {
+          "queryReplacement": "={{ [ $('Standardize Lead').item.json.email, $('Standardize Lead').item.json.fullName, $('Standardize Lead').item.json.primaryPhone, $('Standardize Lead').item.json.companyName, $('Standardize Lead').item.json.domain, JSON.stringify($('Standardize Lead').item.json.tags), $('Standardize Lead').item.json.source, $('Standardize Lead').item.json.submittedAt, JSON.stringify({ companySize: $json.companySize, industry: $json.industry, painPoint: $json.painPoint }) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        848,
+        0
+      ],
+      "id": "be017b3a-9eb4-42f0-8066-96d79b687e52",
+      "name": "Insert Enriched Lead",
+      "credentials": {
+        "postgres": {
+          "id": "10JgRAAv6lV3kufu",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Standardize Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Enrich Lead with AI",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML cleaner": {
+      "main": [
+        [
+          {
+            "node": "Enrich Lead with AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Standardize Lead": {
+      "main": [
+        [
+          {
+            "node": "Dedup check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedup check": {
+      "main": [
+        [
+          {
+            "node": "Is Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Duplicate?": {
+      "main": [
+        [
+          {
+            "node": "Scrape Company Site",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Last Seen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape Company Site": {
+      "main": [
+        [
+          {
+            "node": "HTML cleaner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich Lead with AI": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Output": {
+      "main": [
+        [
+          {
+            "node": "Insert Enriched Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "3fe5b7bd-7099-4b91-89e1-833ee02a8075",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "8ce3f92da4afb6bd2ed2ffbeb70a8662c593fc8d08f26336ecd908790771935d"
+  },
+  "nodeGroups": [],
+  "id": "FA9YhQ0I5WSu4sYU",
+  "tags": []
+}
